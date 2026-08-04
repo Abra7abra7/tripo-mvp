@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: tripo-mvp
+    runtime: image
+    repo: https://github.com/Abra7abra7/tripo-mvp
+    branch: main
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: TRIPO_API_KEY
+        sync: false
