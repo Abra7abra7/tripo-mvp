@@ -1,4 +1,4 @@
-import os, uuid, asyncio, json
+import os, uuid, asyncio, json, time
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -12,6 +12,7 @@ OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 JOBS_FILE = BASE_DIR / "jobs.json"
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", 30))
 
 # ── Persistent job store ──
 def _load_jobs() -> dict[str, dict]:
@@ -32,6 +33,24 @@ def _save_jobs():
 jobs: dict[str, dict] = _load_jobs()
 
 app = FastAPI(title="Tripo3D MVP")
+
+# Auto-delete old files on startup
+@app.on_event("startup")
+async def cleanup_old_files():
+    """Delete files and jobs older than RETENTION_DAYS"""
+    cutoff = time.time() - (RETENTION_DAYS * 86400)
+    for f in OUTPUT_DIR.iterdir():
+        if f.is_file() and f.stat().st_mtime < cutoff:
+            f.unlink()
+    # Prune orphaned jobs from JSON (no corresponding file on disk)
+    if JOBS_FILE.exists():
+        try:
+            data = json.loads(JOBS_FILE.read_text())
+            active_job_ids = {p.stem for p in OUTPUT_DIR.iterdir() if p.suffix in ('.glb', '.stl')}
+            data = {k: v for k, v in data.items() if k in active_job_ids}
+            JOBS_FILE.write_text(json.dumps(data, indent=2))
+        except (json.JSONDecodeError, OSError):
+            pass
 
 # Serve static and output files
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -145,6 +164,11 @@ async def process_job(job_id: str, image_bytes: bytes, filename: str):
 async def index():
     index_html = (BASE_DIR / "static" / "index.html").read_text()
     return HTMLResponse(index_html)
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy():
+    privacy_html = (BASE_DIR / "static" / "privacy.html").read_text()
+    return HTMLResponse(privacy_html)
 
 @app.get("/api/health")
 async def health():
