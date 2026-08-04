@@ -7,9 +7,6 @@ import httpx
 
 # ── Config ──
 TRIPO_API_KEY = os.environ.get("TRIPO_API_KEY", "")
-if not TRIPO_API_KEY:
-    raise RuntimeError("TRIPO_API_KEY env var required")
-
 BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -128,6 +125,11 @@ async def process_job(job_id: str, image_bytes: bytes, filename: str):
 async def index():
     index_html = (BASE_DIR / "static" / "index.html").read_text()
     return HTMLResponse(index_html)
+
+@app.get("/api/health")
+async def health():
+    key_ok = bool(TRIPO_API_KEY)
+    return JSONResponse({"status": "ok", "tripo_api_key_configured": key_ok})
 
 @app.post("/api/upload")
 async def upload_and_generate(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
