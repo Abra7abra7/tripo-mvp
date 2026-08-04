@@ -34,11 +34,11 @@ User Photo (JPG/PNG/WebP)
 
 ### 🔴 High Priority (do before selling)
 
-- [ ] **Request DPA from Render** — go to render.com/security → "Request Documents" → GDPR-DPA
-- [ ] **Request DPA from Tripo** — email support@tripo3d.ai, ask for DPA / data processing addendum
-- [ ] **Upgrade Render to paid plan (Frankfurt, EU)** — free tier is Ohio (US data transfer)
-- [ ] **Add Privacy Policy** — ✅ Done at /privacy
-- [ ] **Add data retention (30d auto-delete)** — ✅ Done (startup cleanup)
+- [x] **Request DPA from Render** — ✅ email sent to security@render.com (Aug 4, 2026)
+- [x] **Request DPA from Tripo** — ✅ email sent to support@tripo3d.ai (Aug 4, 2026)
+- [ ] **Upgrade Render to paid plan (Frankfurt, EU)** — free tier is Ohio (US data transfer). ⚠️ Render API potvrdila: free plan podporuje LEN Ohio. Pre Frankfurt treba upgradnut na starter ($7/mes) cez dashboard
+- [x] **Add Privacy Policy** — ✅ Done at /privacy
+- [x] **Add data retention (30d auto-delete)** — ✅ Done (startup cleanup)
 - [ ] **Update Terms of Service link** on website
 
 ### 🟡 Medium Priority
