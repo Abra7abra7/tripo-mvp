@@ -1,4 +1,4 @@
-import os, uuid, asyncio
+import os, uuid, asyncio, json
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -11,25 +11,49 @@ BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+JOBS_FILE = BASE_DIR / "jobs.json"
+
+# ── Persistent job store ──
+def _load_jobs() -> dict[str, dict]:
+    if JOBS_FILE.exists():
+        try:
+            data = json.loads(JOBS_FILE.read_text())
+            return {k: v for k, v in data.items() if v.get("status") not in ("done", "error")}
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+def _save_jobs():
+    try:
+        JOBS_FILE.write_text(json.dumps(jobs, indent=2))
+    except OSError:
+        pass  # non-critical write, best effort
+
+jobs: dict[str, dict] = _load_jobs()
+
 app = FastAPI(title="Tripo3D MVP")
 
 # Serve static and output files
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
 
-# In-memory job store
-jobs: dict[str, dict] = {}
-
 TRIPO_HEADERS = {"Authorization": f"Bearer {TRIPO_API_KEY}"}
+
+# ── Helpers ──
+def _set_job(job_id: str, **updates):
+    job = jobs.get(job_id)
+    if job:
+        job.update(updates)
+    _save_jobs()
 
 async def process_job(job_id: str, image_bytes: bytes, filename: str):
     """Background task: upload → generate → poll → download → convert"""
     jobs[job_id] = {"status": "uploading", "progress": 10, "job_id": job_id}
+    _save_jobs()
     try:
         # 1. Upload to Tripo
-        async with httpx.AsyncClient(timeout=30) as client:
-            jobs[job_id]["status"] = "uploading"
-            jobs[job_id]["progress"] = 15
+        async with httpx.AsyncClient(timeout=60) as client:
+            _set_job(job_id, status="uploading", progress=15)
             resp = await client.post(
                 "https://api.tripo3d.ai/v2/openapi/upload/sts",
                 headers=TRIPO_HEADERS,
@@ -41,9 +65,8 @@ async def process_job(job_id: str, image_bytes: bytes, filename: str):
             file_token = data["data"]["image_token"]
 
         # 2. Generate
-        jobs[job_id]["status"] = "generating"
-        jobs[job_id]["progress"] = 30
-        async with httpx.AsyncClient(timeout=30) as client:
+        _set_job(job_id, status="generating", progress=30)
+        async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 "https://openapi.tripo3d.ai/v3/generation/image-to-model",
                 headers=TRIPO_HEADERS,
@@ -61,8 +84,7 @@ async def process_job(job_id: str, image_bytes: bytes, filename: str):
             task_id = data["data"]["task_id"]
 
         # 3. Poll
-        jobs[job_id]["status"] = "processing"
-        jobs[job_id]["progress"] = 50
+        _set_job(job_id, status="processing", progress=50)
         async with httpx.AsyncClient(timeout=30) as client:
             for _ in range(60):
                 resp = await client.get(
@@ -70,7 +92,8 @@ async def process_job(job_id: str, image_bytes: bytes, filename: str):
                     headers=TRIPO_HEADERS
                 )
                 d = resp.json()["data"]
-                jobs[job_id]["progress"] = min(50 + int(d.get("progress", 0) * 0.3), 80)
+                progress = min(50 + int(d.get("progress", 0) * 0.3), 80)
+                _set_job(job_id, progress=progress)
                 if d["status"] == "success":
                     output = d["output"]
                     break
@@ -80,10 +103,9 @@ async def process_job(job_id: str, image_bytes: bytes, filename: str):
             else:
                 raise Exception("Task timed out")
 
-        # 4. Download
-        jobs[job_id]["status"] = "downloading"
-        jobs[job_id]["progress"] = 82
-        async with httpx.AsyncClient(timeout=120) as client:
+        # 4. Download from Tripo
+        _set_job(job_id, status="downloading", progress=82)
+        async with httpx.AsyncClient(timeout=300) as client:  # longer timeout for large files
             resp = await client.get(output["model_url"])
             glb_path = OUTPUT_DIR / f"{job_id}.glb"
             with open(glb_path, "wb") as f:
@@ -96,8 +118,7 @@ async def process_job(job_id: str, image_bytes: bytes, filename: str):
                     f.write(resp_r.content)
 
         # 5. Convert to STL
-        jobs[job_id]["status"] = "exporting"
-        jobs[job_id]["progress"] = 90
+        _set_job(job_id, status="exporting", progress=90)
         try:
             import trimesh
             scene = trimesh.load(str(glb_path))
@@ -105,19 +126,18 @@ async def process_job(job_id: str, image_bytes: bytes, filename: str):
             stl_path = OUTPUT_DIR / f"{job_id}.stl"
             mesh.export(str(stl_path), file_type="stl")
             has_stl = True
-        except Exception as e:
+        except Exception:
             has_stl = False
 
-        jobs[job_id].update({
-            "status": "done",
-            "progress": 100,
-            "glb": f"/output/{job_id}.glb",
-            "stl": f"/output/{job_id}.stl" if has_stl else None,
-        })
+        _set_job(job_id,
+            status="done",
+            progress=100,
+            glb=f"/output/{job_id}.glb",
+            stl=f"/output/{job_id}.stl" if has_stl else None,
+        )
 
     except Exception as e:
-        jobs[job_id]["status"] = "error"
-        jobs[job_id]["error"] = str(e)
+        _set_job(job_id, status="error", error=str(e))
 
 # ── Routes ──
 
